@@ -18,6 +18,9 @@ This project specifically solves the **second version** of the environment, whic
 ### Trained Agent Performance
 
 The agent was successfully trained to achieve the required score criterion.
+
+![Trained Agent][image1]
+
 ---
 ### ⚙️ State and Action Spaces
 
