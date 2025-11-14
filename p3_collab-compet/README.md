@@ -45,7 +45,7 @@ Follow the instructions in `Tennis.ipynb` to get started with training your own 
 
 To train the MASAC agent:
 
-`python train.py` 
+Go to `Tennis.ipynb` and run the train function.
 
 Training automatically:
 
