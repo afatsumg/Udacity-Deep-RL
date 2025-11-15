@@ -123,25 +123,39 @@ class MASAC:
         # states_b: [B, full_state], actions_b: [B, full_action]
         # rewards_b: [B, N], dones_b: [B, N]
 
-        # 1) compute next actions & log_probs (for all agents)
+        # -------------------------------
+        # 1) Compute next actions & log_probs (for all agents)
+        # For agent i:
+        # a'_i ~ pi_phi(a_i | s'_i)
+        # Form full next action vector: a' = [a'_1, ..., a'_N]
+        # -------------------------------
         next_actions = []
         next_logp = 0.0
         for i in range(self.N):
             s_i = next_states_b[:, i*self.S:(i+1)*self.S]
             a_i, logp_i, _ = self.actors[i].sample(s_i)
             next_actions.append(a_i)
-            next_logp = next_logp + logp_i  # sum over agents (shape [B,1])
+            next_logp = next_logp + logp_i  # sum log probs over all agents (entropy term)
         next_actions_cat = torch.cat(next_actions, dim=1)  # [B, full_action]
 
+        # -------------------------------
+        # 2) Compute target Q values using Twin-Q networks
+        # Q_min(s', a') = min(Q1_target(s', a'), Q2_target(s', a')) - alpha * sum_i log pi(a'_i|s'_i)
+        # Convert rewards to cooperative scalar target: r_sum = sum_i r_i
+        # y = r_sum + gamma * (1 - done_any) * Q_min(s', a')
+        # -------------------------------
         with torch.no_grad():
             q1_next, q2_next = self.critic_target(next_states_b, next_actions_cat)
             q_next = torch.min(q1_next, q2_next) - self.alpha * next_logp
-            # convert rewards to scalar target: sum rewards across agents (cooperative)
             r_sum = rewards_b.sum(dim=1, keepdim=True)
             d_any = dones_b.max(dim=1, keepdim=True)[0]
             y = r_sum + (1.0 - d_any) * self.gamma * q_next
 
-        # 2) critic update
+        # -------------------------------
+        # 3) Critic update
+        # Loss: L_critic = MSE(Q1(s,a), y) + MSE(Q2(s,a), y)
+        # Update critic network parameters
+        # -------------------------------
         q1, q2 = self.critic(states_b, actions_b)
         critic_loss = F.mse_loss(q1, y) + F.mse_loss(q2, y)
 
@@ -150,13 +164,17 @@ class MASAC:
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
         self.critic_opt.step()
 
-        # 3) actor updates (per agent)
-        # we update each actor to maximize expected Q - alpha * logp
+        # -------------------------------
+        # 4) Actor updates (per agent)
+        # Maximize expected Q - alpha * log_prob:
+        # L_actor_i = E[alpha * log pi(a_i|s_i) - Q_min(s, a_pred)]
+        # a_pred = [a_1_pred, ..., a_i, ..., a_N_pred] 
+        # with other agents' actions detached (no gradient through them)
+        # -------------------------------
         for i in range(self.N):
             s_i = states_b[:, i*self.S:(i+1)*self.S]
             a_i, logp_i, _ = self.actors[i].sample(s_i)
 
-            # build full action vector with current agent's sampled action and others' actions from actors (detached)
             actions_pred = []
             for j in range(self.N):
                 if j == i:
@@ -177,6 +195,10 @@ class MASAC:
             torch.nn.utils.clip_grad_norm_(self.actors[i].parameters(), 1.0)
             self.actors_opt[i].step()
 
-        # 4) soft-update target critic
+        # -------------------------------
+        # 5) Soft update of target critic network
+        # theta_target = tau * theta + (1 - tau) * theta_target
+        # -------------------------------
         for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+
